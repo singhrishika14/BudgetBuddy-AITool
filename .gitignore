@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# BudgetBuddy specific files
+backend/venv/
+backend/db.sqlite3
+frontend/node_modules/
+frontend/dist/
+.env
+**/.env
+__pycache__/
+*.py[cod]
