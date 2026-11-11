@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import './App.css';
 const API = 'http://127.0.0.1:8000/api/expenses/';
 const REGISTER = 'http://127.0.0.1:8000/api/register/';
@@ -71,6 +71,7 @@ function App() {
   const [budget, setBudget] = useState(() =>
     Number(localStorage.getItem('bb-budget') || 20000)
   );
+  const [notifications, setNotifications] = useState([]);
   const [budgetInput, setBudgetInput] = useState(() =>
     String(localStorage.getItem('bb-budget') || 20000)
   );
@@ -148,9 +149,45 @@ function App() {
     }
   }
 
+  async function loadNotifications() {
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      setNotifications([]);
+      return;
+    }
+    try {
+      const response = await fetch(`${API}notifications/`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await readResponse(response);
+      if (Array.isArray(data)) setNotifications(data);
+    } catch (error) {
+      console.error('Could not load notifications:', error);
+    }
+  }
+
+  async function markNotificationRead(id) {
+    const token = localStorage.getItem('accessToken');
+    try {
+      const response = await fetch(`${API}notifications/${id}/read/`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ is_read: true }),
+      });
+      const updated = await readResponse(response);
+      setNotifications((current) => current.map((item) => item.id === id ? updated : item));
+    } catch (error) {
+      setMessage(error.message || 'Could not update notification.');
+    }
+  }
+
   useEffect(() => {
     if (authenticated) {
       loadExpenses();
+      loadNotifications();
     }
     // Initial load only; refreshes happen through loadExpenses().
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -219,6 +256,7 @@ function App() {
 
     setAuthenticated(false);
     setExpenses([]);
+    setNotifications([]);
     setPage('Dashboard');
     setAuthMode('login');
     setAuthForm({ username: '', email: '', password: '' });
@@ -281,6 +319,7 @@ function App() {
       setShowForm(false);
       setPage('Transactions');
       setMessage('Expense saved successfully!');
+      await loadNotifications();
     } catch (error) {
       setMessage(error.message || 'Could not save expense.');
     }
@@ -361,12 +400,165 @@ function App() {
     );
   });
 
-  const categoryTotals = CATEGORIES.map((category) => ({
+  const categoryTotals = useMemo(() => CATEGORIES.map((category) => ({
     category,
     total: expenses
       .filter((expense) => expense.category === category)
       .reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
-  }));
+  })), [expenses]);
+
+  const monthlyCategoryTotals = useMemo(() => CATEGORIES.map((category) => ({
+    category,
+    total: expenses
+      .filter((expense) => String(expense.date || '').startsWith(month) && expense.category === category)
+      .reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
+  })), [expenses, month]);
+
+  // Category alerts use current-month spending, not all-time spending.
+  useEffect(() => {
+    let cancelled = false;
+    const sendCategoryAlerts = async () => {
+      const token = localStorage.getItem('accessToken');
+      if (!token || !authenticated) return;
+      const monthKey = month;
+
+      for (const item of monthlyCategoryTotals) {
+        const limit = Number(categoryBudgets[item.category] || 0);
+        const spent = Number(item.total || 0);
+        if (limit <= 0 || spent < limit * 0.8) continue;
+
+        const level = spent > limit ? 'over' : spent >= limit ? 'limit' : 'warning';
+        const storageKey = `bb-category-${monthKey}-${item.category}-${level}`;
+        if (localStorage.getItem(storageKey)) continue;
+        localStorage.setItem(storageKey, 'pending');
+
+        try {
+          const response = await fetch(`${API}notifications/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              title: `${item.category} ${level === 'warning' ? 'Budget Warning' : 'Budget Alert'}`,
+              message: level === 'over'
+                ? `${item.category} spending is over budget: ${money(spent)} spent against ${money(limit)}.`
+                : level === 'limit'
+                  ? `${item.category} budget limit reached: ${money(spent)} of ${money(limit)} used.`
+                  : `${item.category} has reached 80% of its budget: ${money(spent)} of ${money(limit)} used.`,
+            }),
+          });
+          await readResponse(response);
+          localStorage.setItem(storageKey, 'sent');
+          if (!cancelled) await loadNotifications();
+        } catch (error) {
+          localStorage.removeItem(storageKey);
+          console.error('Category notification failed:', error);
+        }
+      }
+    };
+    sendCategoryAlerts();
+    return () => { cancelled = true; };
+  }, [monthlyCategoryTotals, categoryBudgets, authenticated, month]);
+
+// BUDGET UTILIZATION ALERTS
+
+const bbCurrentMonth = new Date().getMonth();
+const bbCurrentYear = new Date().getFullYear();
+
+const bbMonthlyExpenses = expenses.filter((item) => {
+  const d = new Date(item.date);
+
+  return (
+    d.getMonth() === bbCurrentMonth &&
+    d.getFullYear() === bbCurrentYear
+  );
+});
+
+const bbTotalSpent = bbMonthlyExpenses.reduce(
+  (sum, item) => sum + Number(item.amount || 0),
+  0
+);
+
+const bbBudgetPercentage =
+  budget > 0 ? (bbTotalSpent / budget) * 100 : 0;
+
+let bbBudgetAlert = null;
+
+if (bbBudgetPercentage > 100) {
+  bbBudgetAlert = {
+    type: "danger",
+    message: `Overspending! You exceeded your budget by ₹${(bbTotalSpent - budget).toFixed(2)}`
+  };
+} else if (bbBudgetPercentage >= 100) {
+  bbBudgetAlert = {
+    type: "danger",
+    message: "Your monthly budget limit has been reached!"
+  };
+} else if (bbBudgetPercentage >= 80) {
+  bbBudgetAlert = {
+    type: "warning",
+    message: "Warning! You have used 80% of your monthly budget."
+  };
+}
+
+// SAVE BUDGET ALERTS IN DJANGO
+
+useEffect(() => {
+  const sendNotification = async () => {
+    const token = localStorage.getItem("accessToken");
+
+    if (!token || !bbBudgetAlert) return;
+
+    const monthKey = new Date().toISOString().slice(0, 7);
+
+    const alertType =
+      bbBudgetPercentage > 100
+        ? "overspending"
+        : bbBudgetPercentage >= 100
+        ? "limit-reached"
+        : "80-percent-warning";
+
+    const storageKey = `bb-${monthKey}-${alertType}`;
+
+    if (localStorage.getItem(storageKey)) return;
+
+    // Prevent duplicate requests
+    localStorage.setItem(storageKey, "pending");
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/api/expenses/notifications/",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            title: bbBudgetAlert.type === "danger"
+              ? "Budget Alert"
+              : "Budget Warning",
+            message: bbBudgetAlert.message,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      localStorage.setItem(storageKey, "sent");
+      await loadNotifications();
+      console.log("Budget notification saved successfully!");
+    } catch (error) {
+      localStorage.removeItem(storageKey);
+      console.error("Notification error:", error);
+    }
+  };
+
+  sendNotification();
+}, [bbBudgetPercentage, bbTotalSpent, budget]);
 
   function exportCSV() {
     const rows = [
@@ -401,7 +593,12 @@ function App() {
 
     URL.revokeObjectURL(url);
   }
-
+useEffect(() => {
+  if (authenticated) loadNotifications();
+  else setNotifications([]);
+  // loadNotifications is intentionally called when auth state changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [authenticated]);
   if (!authenticated) {
     return (
       <div className="auth-container">
@@ -634,7 +831,55 @@ function App() {
                 <h2>{money(remaining)}</h2>
               </div>
             </section>
+{/* BUDGET UTILIZATION ALERT */}
 
+{bbBudgetAlert && (
+  <div
+    style={{
+      padding: "15px",
+      margin: "15px 0",
+      borderRadius: "10px",
+      background:
+        bbBudgetAlert.type === "danger"
+          ? "#ffe0e0"
+          : "#fff1cc",
+      color:
+        bbBudgetAlert.type === "danger"
+          ? "#b91c1c"
+          : "#92400e",
+      fontWeight: "bold"
+    }}
+  >
+    🔔 {bbBudgetAlert.message}
+  </div>
+)}
+{/* SAVED NOTIFICATIONS */}
+
+<section className="panel">
+  <h2>🔔 Notifications</h2>
+
+  {notifications.length === 0 ? (
+    <p>No notifications yet.</p>
+  ) : (
+    notifications.map((notification) => (
+      <div className="notification-item" key={notification.id}>
+        <strong>{notification.title}</strong>
+        {!notification.is_read && <span className="notification-unread">New</span>}
+        <p>{notification.message}</p>
+        <small>
+          {notification.created_at
+            ? new Date(notification.created_at).toLocaleString()
+            : ''}
+        </small>
+        {!notification.is_read && (
+          <button type="button" onClick={() => markNotificationRead(notification.id)}>
+            Mark as read
+          </button>
+        )}
+      </div>
+    ))
+  )}
+</section>
             {remaining < 0 && (
               <p className="warning-message">
                 You have exceeded your monthly budget.
@@ -859,7 +1104,29 @@ function App() {
             </section>
 
             <section className="panel">
-              <h2>Spending by Category</h2>
+              <h2>Monthly Spending Insights</h2>
+              <p>Budget utilization: <strong>{budget > 0 ? Math.round((monthlyExpenses / budget) * 100) : 0}%</strong></p>
+              <p>Average expense per transaction this month: <strong>{money(expenses.filter((item) => String(item.date || '').startsWith(month)).length ? monthlyExpenses / expenses.filter((item) => String(item.date || '').startsWith(month)).length : 0)}</strong></p>
+              <p>Highest spending category this month: <strong>{monthlyCategoryTotals.reduce((best, item) => item.total > best.total ? item : best, { category: 'None', total: 0 }).category}</strong></p>
+            </section>
+
+            <section className="panel">
+              <h2>This Month: Spending by Category</h2>
+              {monthlyCategoryTotals.filter((item) => item.total > 0).length === 0 ? (
+                <p>No expenses recorded this month.</p>
+              ) : monthlyCategoryTotals.filter((item) => item.total > 0).map(({ category, total }) => (
+                <div className="list-row" key={`monthly-${category}`}>
+                  <span>{category}</span>
+                  <div className="report-bar-track">
+                    <div className="report-bar-fill" style={{ width: `${monthlyExpenses ? (total / monthlyExpenses) * 100 : 0}%` }} />
+                  </div>
+                  <strong>{money(total)}</strong>
+                </div>
+              ))}
+            </section>
+
+            <section className="panel">
+              <h2>Spending by Category (All Time)</h2>
 
               {categoryTotals.filter((item) => item.total > 0).length === 0 ? (
                 <p>No expenses available for a report yet.</p>
