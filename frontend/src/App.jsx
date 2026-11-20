@@ -72,6 +72,7 @@ function App() {
     Number(localStorage.getItem('bb-budget') || 20000)
   );
   const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [budgetInput, setBudgetInput] = useState(() =>
     String(localStorage.getItem('bb-budget') || 20000)
   );
@@ -414,6 +415,32 @@ function App() {
       .reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
   })), [expenses, month]);
 
+  const unreadNotifications = notifications.filter((item) => !item.is_read).length;
+
+  const monthlyTrend = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const total = expenses.filter((item) => String(item.date || '').startsWith(key))
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      return { key, label: date.toLocaleDateString('en-IN', { month: 'short' }), total };
+    });
+  }, [expenses]);
+
+  const categoryChartData = monthlyCategoryTotals.filter((item) => item.total > 0);
+  const categoryChartTotal = categoryChartData.reduce((sum, item) => sum + item.total, 0);
+  const categoryChartGradient = useMemo(() => {
+    const colors = ['#174c3c', '#28745b', '#5b9b79', '#a5c8a8', '#d1a85b', '#8b9b83'];
+    if (!categoryChartTotal) return '#e8eee9 0% 100%';
+    let cursor = 0;
+    return categoryChartData.map((item, index) => {
+      const start = cursor;
+      cursor += (item.total / categoryChartTotal) * 100;
+      return `${colors[index % colors.length]} ${start}% ${cursor}%`;
+    }).join(', ');
+  }, [categoryChartData, categoryChartTotal]);
+
   // Category alerts use current-month spending, not all-time spending.
   useEffect(() => {
     let cancelled = false;
@@ -729,7 +756,47 @@ useEffect(() => {
             </p>
           </div>
 
-          {(page === 'Dashboard' || page === 'Transactions') && (
+          <div className="header-actions">
+            <div className="notification-menu">
+              <button
+                type="button"
+                className={`notification-trigger ${showNotifications ? 'is-open' : ''}`}
+                aria-label="Open notifications"
+                aria-expanded={showNotifications}
+                onClick={() => setShowNotifications((open) => !open)}
+              >
+                <span className="notification-bell" aria-hidden="true">🔔</span>
+                {unreadNotifications > 0 && <span className="notification-count">{unreadNotifications > 9 ? '9+' : unreadNotifications}</span>}
+              </button>
+              {showNotifications && (
+                <div className="notification-dropdown">
+                  <div className="notification-dropdown-header">
+                    <div><strong>Notifications</strong><span>{unreadNotifications} unread</span></div>
+                    <button type="button" className="text-button" onClick={loadNotifications}>Refresh</button>
+                  </div>
+                  <div className="notification-dropdown-list">
+                    {notifications.length === 0 ? (
+                      <p className="empty-state">You're all caught up. No notifications yet.</p>
+                    ) : notifications.map((notification) => (
+                      <article className={`notification-item ${notification.is_read ? 'read' : 'unread'}`} key={notification.id}>
+                        <div className="notification-item-top">
+                          <strong>{notification.title}</strong>
+                          {!notification.is_read && <span className="notification-unread">New</span>}
+                        </div>
+                        <p>{notification.message}</p>
+                        <div className="notification-item-bottom">
+                          <small>{notification.created_at ? new Date(notification.created_at).toLocaleString() : ''}</small>
+                          {!notification.is_read && (
+                            <button type="button" className="text-button" onClick={() => markNotificationRead(notification.id)}>Mark as read</button>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            {(page === 'Dashboard' || page === 'Transactions') && (
             <button
               type="button"
               onClick={() => setShowForm((current) => !current)}
@@ -737,6 +804,7 @@ useEffect(() => {
               {showForm ? 'Cancel' : '+ Add Expense'}
             </button>
           )}
+          </div>
         </header>
 
         {message && (
@@ -853,38 +921,22 @@ useEffect(() => {
     🔔 {bbBudgetAlert.message}
   </div>
 )}
-{/* SAVED NOTIFICATIONS */}
-
-<section className="panel">
-  <h2>🔔 Notifications</h2>
-
-  {notifications.length === 0 ? (
-    <p>No notifications yet.</p>
-  ) : (
-    notifications.map((notification) => (
-      <div className="notification-item" key={notification.id}>
-        <strong>{notification.title}</strong>
-        {!notification.is_read && <span className="notification-unread">New</span>}
-        <p>{notification.message}</p>
-        <small>
-          {notification.created_at
-            ? new Date(notification.created_at).toLocaleString()
-            : ''}
-        </small>
-        {!notification.is_read && (
-          <button type="button" onClick={() => markNotificationRead(notification.id)}>
-            Mark as read
-          </button>
-        )}
-      </div>
-    ))
-  )}
-</section>
-            {remaining < 0 && (
+{remaining < 0 && (
               <p className="warning-message">
                 You have exceeded your monthly budget.
               </p>
             )}
+
+            <section className="visual-grid">
+              <div className="panel chart-panel">
+                <div className="panel-heading"><div><h2>Spending trend</h2><p className="muted">Your last six months</p></div><span className="chart-tag">6 months</span></div>
+                <MonthlyTrendChart data={monthlyTrend} money={money} />
+              </div>
+              <div className="panel chart-panel">
+                <div className="panel-heading"><div><h2>Spending by category</h2><p className="muted">Current month breakdown</p></div></div>
+                <CategoryDonut data={categoryChartData} total={categoryChartTotal} gradient={categoryChartGradient} money={money} />
+              </div>
+            </section>
 
             <section className="panel">
               <div className="panel-heading">
@@ -1110,6 +1162,17 @@ useEffect(() => {
               <p>Highest spending category this month: <strong>{monthlyCategoryTotals.reduce((best, item) => item.total > best.total ? item : best, { category: 'None', total: 0 }).category}</strong></p>
             </section>
 
+            <section className="visual-grid">
+              <div className="panel chart-panel">
+                <div className="panel-heading"><div><h2>Monthly spending trend</h2><p className="muted">Six-month overview</p></div></div>
+                <MonthlyTrendChart data={monthlyTrend} money={money} />
+              </div>
+              <div className="panel chart-panel">
+                <div className="panel-heading"><div><h2>Category distribution</h2><p className="muted">This month's expenses</p></div></div>
+                <CategoryDonut data={categoryChartData} total={categoryChartTotal} gradient={categoryChartGradient} money={money} />
+              </div>
+            </section>
+
             <section className="panel">
               <h2>This Month: Spending by Category</h2>
               {monthlyCategoryTotals.filter((item) => item.total > 0).length === 0 ? (
@@ -1170,6 +1233,42 @@ useEffect(() => {
   );
 }
 
+
+function MonthlyTrendChart({ data, money }) {
+  const max = Math.max(...data.map((item) => item.total), 1);
+  return (
+    <div className="trend-chart" role="img" aria-label="Spending over the last six months">
+      <div className="trend-chart-bars">
+        {data.map((item) => (
+          <div className="trend-column" key={item.key} title={`${item.label}: ${money(item.total)}`}>
+            <span className="trend-value">{item.total ? money(item.total) : '—'}</span>
+            <div className="trend-bar-area"><div className="trend-bar" style={{ height: `${Math.max(item.total ? 5 : 0, (item.total / max) * 100)}%` }} /></div>
+            <span className="trend-label">{item.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CategoryDonut({ data, total, gradient, money }) {
+  if (!data.length || total <= 0) return <div className="chart-empty">Add expenses to see your category breakdown.</div>;
+  return (
+    <div className="donut-layout">
+      <div className="donut-chart" style={{ background: `conic-gradient(${gradient})` }} role="img" aria-label="Spending by category">
+        <div className="donut-hole"><span>Total spent</span><strong>{money(total)}</strong></div>
+      </div>
+      <div className="donut-legend">
+        {data.map((item, index) => (
+          <div className="legend-row" key={item.category}>
+            <span className={`legend-dot legend-${index % 6}`} /><span>{item.category}</span>
+            <strong>{Math.round((item.total / total) * 100)}%</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function ExpenseList({ expenses, onChanged }) {
   async function editExpense(expense) {
@@ -1315,7 +1414,7 @@ function SavingsCard({ goal, percent }) {
         style={{
           width: "100%",
           height: "10px",
-          background: "#e9e5ff",
+          background: "#e5eee8",
           borderRadius: "10px",
           overflow: "hidden"
         }}
@@ -1324,7 +1423,7 @@ function SavingsCard({ goal, percent }) {
           style={{
             width: `${Math.min(100, Math.max(0, Number(percent) || 0))}%`,
             height: "100%",
-            background: "#6254dc"
+            background: "#28745b"
           }}
         />
       </div>
