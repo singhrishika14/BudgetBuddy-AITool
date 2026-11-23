@@ -1310,7 +1310,7 @@ function ExpenseList({ expenses, onChanged }) {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/api/expenses/${expense.id}/`,
+        `${API}${expense.id}/`,
         {
           method: "PATCH",
           headers: {
@@ -1347,7 +1347,7 @@ function ExpenseList({ expenses, onChanged }) {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/api/expenses/${expense.id}/`,
+        `${API}${expense.id}/`,
         {
           method: "DELETE",
           headers: {
