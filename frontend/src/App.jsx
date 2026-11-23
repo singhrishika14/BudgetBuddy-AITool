@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import './App.css';
-const API = 'http://127.0.0.1:8000/api/expenses/';
-const REGISTER = 'http://127.0.0.1:8000/api/register/';
-const LOGIN = 'http://127.0.0.1:8000/api/token/';
+const API = "https://budgetbuddy-backend-nxbb.onrender.com/api/expenses/";
+const REGISTER = "https://budgetbuddy-backend-nxbb.onrender.com/api/register/";
+const LOGIN = "https://budgetbuddy-backend-nxbb.onrender.com/api/token/";
 const CATEGORIES = [
   'Food',
   'Travel',
