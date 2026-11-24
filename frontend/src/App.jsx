@@ -555,8 +555,9 @@ useEffect(() => {
 
     try {
       const response = await fetch(
-        `${API}notifications/`
-        {
+         `${API}notifications/`,
+          {
+
           method: "POST",
           headers: {
             "Content-Type": "application/json",
