@@ -1,9 +1,8 @@
 
 import logging
-
+import resend
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.core.mail import send_mail
 from django.db.models import Sum, Count
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
@@ -28,37 +27,37 @@ def send_notification_email(notification):
         logger.warning("No registered email for user %s", user.username)
         return False
 
+    if not settings.RESEND_API_KEY:
+        logger.error("Resend API key is missing")
+        return False
+
     subject = f"BudgetBuddy: {notification.title}"
 
     message = f"""
-Hello {user.username},
+    Hello {user.username},
 
-{notification.title}
+    {notification.title}
 
-{notification.message}
+    {notification.message}
 
-This is an automatic notification from BudgetBuddy.
+    This is an automatic notification from BudgetBuddy.
 
-Regards,
-BudgetBuddy Team
-"""
+    Regards,
+    BudgetBuddy Team
+    """
 
     try:
-        sent = send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
+        resend.api_key = settings.RESEND_API_KEY
 
-        if sent == 1:
-            logger.info("Email successfully sent to %s", user.email)
-            return True
+        result = resend.Emails.send({
+            "from": "BudgetBuddy <onboarding@resend.dev>",
+            "to": [user.email],
+            "subject": subject,
+            "text": message,
+        })
 
-        logger.error("Email was not accepted for %s", user.email)
-        return False
-
+        logger.info("Email accepted by Resend for %s: %s", user.email, result)
+        return True
     except Exception:
         logger.exception("Could not send notification email to %s", user.email)
         return False
